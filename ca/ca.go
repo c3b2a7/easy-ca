@@ -14,6 +14,8 @@ import (
 	"strings"
 )
 
+var ErrInvalidCertOptions = errors.New("invalid certificate options")
+
 func GetKeyPairGenerator(algorithm string, opts KeyOptions) (KeyPairGenerator, error) {
 	algorithm = strings.ToUpper(algorithm)
 	if choice, ok := generateList[algorithm]; ok {
@@ -22,88 +24,62 @@ func GetKeyPairGenerator(algorithm string, opts KeyOptions) (KeyPairGenerator, e
 			opts:     opts,
 		}, nil
 	}
-	return nil, UnknownAlgorithmError
+	return nil, ErrUnknownAlgorithm
 }
 
 func CreateSelfSignedCACertificate(keyPair KeyPair, opts CertificateOptions) (*x509.Certificate, error) {
 	if !opts.IsRootCA() {
-		return nil, errors.New("invalid certificate options")
+		return nil, ErrInvalidCertOptions
 	}
-
-	subjectKeyId := internal.CalculateKeyID(keyPair.PublicKey)
-
 	template := opts.ToX509Template()
-	template.BasicConstraintsValid = true
-	template.SubjectKeyId = subjectKeyId
-	template.AuthorityKeyId = subjectKeyId
 	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
-
-	der, err := x509.CreateCertificate(rand.Reader, template, template, keyPair.PublicKey, keyPair.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
-
-	return x509.ParseCertificate(der)
+	return createCertificate(rand.Reader, template, template, keyPair.PublicKey, keyPair.PrivateKey)
 }
 
 func CreateMiddleCACertificate(keyPair KeyPair, opts CertificateOptions) (*x509.Certificate, error) {
 	if !opts.IsMiddleCA() {
-		return nil, errors.New("invalid certificate options")
+		return nil, ErrInvalidCertOptions
 	}
-
 	template := opts.ToX509Template()
-	template.BasicConstraintsValid = true
-	template.SubjectKeyId = internal.CalculateKeyID(keyPair.PublicKey)
-	template.AuthorityKeyId = opts.Issuer.SubjectKeyId
 	template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
 	template.MaxPathLen = 1
-
-	der, err := x509.CreateCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
-	if err != nil {
-		return nil, err
-	}
-
-	return x509.ParseCertificate(der)
+	return createCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
 }
 
-func CreateCertificate(keyPair KeyPair, opts CertificateOptions) (*x509.Certificate, error) {
+func CreateGeneralCertificate(keyPair KeyPair, opts CertificateOptions) (*x509.Certificate, error) {
 	if opts.IsRootCA() || opts.IsMiddleCA() {
-		return nil, errors.New("invalid certificate options")
+		return nil, ErrInvalidCertOptions
 	}
-
 	template := opts.ToX509Template()
-	template.SubjectKeyId = internal.CalculateKeyID(keyPair.PublicKey)
-	template.AuthorityKeyId = opts.Issuer.SubjectKeyId
 	template.KeyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+	return createCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
+}
 
-	der, err := x509.CreateCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
-	if err != nil {
-		return nil, err
+func createCertificate(random io.Reader, template, parent *x509.Certificate, pub, priv any) (cert *x509.Certificate, err error) {
+	template.SubjectKeyId = internal.CalculateKeyID(pub)
+	template.AuthorityKeyId = parent.SubjectKeyId
+	var der []byte
+	if der, err = x509.CreateCertificate(random, template, parent, pub, priv); err == nil {
+		return x509.ParseCertificate(der)
 	}
-
-	return x509.ParseCertificate(der)
+	return
 }
 
 func EncodeCertificateChain(out io.Writer, certificates []*x509.Certificate) (err error) {
-	buf := new(bytes.Buffer)
+	var blocks []*pem.Block
 	for _, certificate := range certificates {
-		err = pem.Encode(buf, &pem.Block{
+		blocks = append(blocks, &pem.Block{
 			Type:  "CERTIFICATE",
 			Bytes: certificate.Raw,
 		})
-		if err != nil {
-			return
-		}
 	}
-	_, err = io.CopyBuffer(out, buf, make([]byte, 4096))
-	return
+	return encodeToWriter(out, blocks...)
 }
 
 func EncodePKCS1PrivateKey(out io.Writer, privateKey any) (err error) {
 	var bytes []byte
 	var pemType string
-
 	switch k := privateKey.(type) {
 	case *rsa.PrivateKey:
 		bytes = x509.MarshalPKCS1PrivateKey(k)
@@ -114,25 +90,36 @@ func EncodePKCS1PrivateKey(out io.Writer, privateKey any) (err error) {
 	case ed25519.PrivateKey:
 		err = errors.New("unsupported private key type: ed25591")
 	default:
-		err = UnknownAlgorithmError
+		err = ErrUnknownAlgorithm
 	}
 
 	if err != nil {
 		return
 	}
-	return pem.Encode(out, &pem.Block{
+	return encodeToWriter(out, &pem.Block{
 		Type:  pemType,
 		Bytes: bytes,
 	})
 }
 
-func EncodePKCS8PrivateKey(out io.Writer, privateKey any) error {
-	bytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		return err
+func EncodePKCS8PrivateKey(out io.Writer, privateKey any) (err error) {
+	var bytes []byte
+	if bytes, err = x509.MarshalPKCS8PrivateKey(privateKey); err == nil {
+		return encodeToWriter(out, &pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: bytes,
+		})
 	}
-	return pem.Encode(out, &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: bytes,
-	})
+	return
+}
+
+func encodeToWriter(out io.Writer, blocks ...*pem.Block) error {
+	buf := new(bytes.Buffer)
+	for _, block := range blocks {
+		if err := pem.Encode(buf, block); err != nil {
+			return err
+		}
+	}
+	_, err := io.CopyBuffer(out, buf, make([]byte, 4096))
+	return err
 }

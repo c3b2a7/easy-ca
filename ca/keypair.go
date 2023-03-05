@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	UnknownPrivateKeyError = errors.New("unknown private key")
-	UnknownAlgorithmError  = errors.New("unknown algorithm")
+	ErrUnknownPrivateKey = errors.New("unknown private key")
+	ErrUnknownAlgorithm  = errors.New("unknown algorithm")
 )
 
 type KeyPair struct {
@@ -60,7 +60,7 @@ func NewKeyPair(privateKey any) (KeyPair, error) {
 	case ed25519.PrivateKey:
 		publicKey = k.Public().(ed25519.PublicKey)
 	default:
-		return kp, UnknownPrivateKeyError
+		return kp, ErrUnknownPrivateKey
 	}
 	kp.PublicKey = publicKey
 	kp.PrivateKey = privateKey
