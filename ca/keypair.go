@@ -23,19 +23,19 @@ type KeyPairGenerator interface {
 
 type keyPairGenerator struct {
 	generate generator
-	opts     KeyOptions
+	opts     keyOptions
 }
 
-type generator func(opts KeyOptions) (any, error)
+type generator func(opts keyOptions) (any, error)
 
 var generateList = map[string]generator{
-	"ECDSA": func(opts KeyOptions) (any, error) {
+	"ECDSA": func(opts keyOptions) (any, error) {
 		return ecdsa.GenerateKey(opts.Curve, opts.Random)
 	},
-	"RSA": func(opts KeyOptions) (any, error) {
+	"RSA": func(opts keyOptions) (any, error) {
 		return rsa.GenerateKey(opts.Random, opts.KeySize)
 	},
-	"ED25591": func(opts KeyOptions) (any, error) {
+	"ED25591": func(opts keyOptions) (any, error) {
 		_, priv, err := ed25519.GenerateKey(opts.Random)
 		return priv, err
 	},

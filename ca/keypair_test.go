@@ -1,23 +1,57 @@
 package ca
 
 import (
-	"crypto/elliptic"
-	"fmt"
 	"testing"
 )
 
-func TestGetInstance(t *testing.T) {
-	var kpg KeyPairGenerator
+func TestGetKeyPairGenerator(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{"ECDSA"},
+		{"RSA"},
+		{"ED25591"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := GetKeyPairGenerator(test.name); err != nil {
+				t.Errorf("failed to get %s keypair generator, err: %s\n", test.name, err)
+			}
+		})
+	}
+}
 
-	kpg, _ = GetKeyPairGenerator("ECDSA", NewKeyOptionBuilder().WithCurve(elliptic.P256()).Build())
-	fmt.Println(kpg.GenerateKeyPair())
-	fmt.Println(kpg.GenerateKeyPair())
+func TestErrUnknownAlgorithm(t *testing.T) {
+	_, err := GetKeyPairGenerator("Unknown")
+	if err != ErrUnknownAlgorithm {
+		t.Error("unexpected error: ", err)
+	}
+}
 
-	kpg, _ = GetKeyPairGenerator("RSA", NewKeyOptionBuilder().Build())
-	fmt.Println(kpg.GenerateKeyPair())
-	fmt.Println(kpg.GenerateKeyPair())
+func TestGenerateKeyPair(t *testing.T) {
+	tests := []struct {
+		name string
+	}{
+		{"ECDSA"},
+		{"RSA"},
+		{"ED25591"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var kgp KeyPairGenerator
+			var err error
+			if kgp, err = GetKeyPairGenerator(test.name); err != nil {
+				t.Errorf("failed to get %s keypair generator, err: %s\n", test.name, err)
+			}
+			if _, err = kgp.GenerateKeyPair(); err != nil {
+				t.Errorf("failed to generate %s keypair, err: %s\n", test.name, err)
+			}
+		})
+	}
+}
 
-	kpg, _ = GetKeyPairGenerator("RSA", NewKeyOptionBuilder().WithKeySize(1024).Build())
-	fmt.Println(kpg.GenerateKeyPair())
-	fmt.Println(kpg.GenerateKeyPair())
+func TestNewKeyPair(t *testing.T) {
+	if _, err := NewKeyPair(nil); err != ErrUnknownPrivateKey {
+		t.Error("unexpected error: ", err)
+	}
 }
