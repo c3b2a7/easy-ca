@@ -6,7 +6,7 @@ import (
 )
 
 func TestParsePKIXName(t *testing.T) {
-	pkixName := ParsePKIXName("C=CN,O=Easy CA,OU=IT Dept.,CN=Easy Root CA")
+	pkixName := ParsePKIXName("/C=CN/O=Easy CA/OU=IT Dept./CN=Easy Root CA")
 	if pkixName.String() == "" {
 		t.Errorf("error to parse pkix name")
 	}

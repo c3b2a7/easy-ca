@@ -129,7 +129,7 @@ var applierList = map[string]func(name *pkix.Name, value any){
 }
 
 func ParsePKIXName(name string) (pkixName pkix.Name) {
-	nTok := NewTokenizer(name, ',')
+	nTok := NewTokenizer(name, '/')
 	for nTok.HasMoreTokens() {
 		token := nTok.NextToken()
 
@@ -157,7 +157,7 @@ func ParsePKIXName(name string) (pkixName pkix.Name) {
 			} else {
 				applier(&pkixName, value)
 			}
-		} else {
+		} else if token != "" {
 			vTok := NewTokenizer(token, '=')
 			attribute := vTok.NextToken()
 			if !vTok.HasMoreTokens() {
