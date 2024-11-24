@@ -7,17 +7,32 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"errors"
-	"github.com/c3b2a7/easy-ca/ca/constants"
 	"github.com/c3b2a7/easy-ca/ca/internal"
 	"io"
+	"net"
 	"strings"
 	"time"
 )
 
 var (
 	ErrInvalidCertOptions = errors.New("invalid certificate options")
+	ErrEmptyPublicKey     = errors.New("empty public key")
+)
+
+var (
+	// DomainValidated policy identifiers of 2.23.140.1.2.1
+	//
+	// Certificate issued in compliance with the TLS Baseline Requirements – No entity identity asserted
+	DomainValidated = asn1.ObjectIdentifier{2, 23, 140, 1, 2, 1}
+)
+
+const (
+	MaxTLSHours = 825 * 24      // 825 days
+	MaxCAHours  = 20 * 365 * 24 // 20 years
 )
 
 // GetKeyPairGenerator returns a KeyPairGenerator
@@ -44,34 +59,27 @@ func CreateSelfSignedRootCertificate(keyPair KeyPair, certOpts ...CertificateOpt
 		return nil, errors.New("empty keypair")
 	}
 	opts := applyDefaultCertificateOptions(certOpts...)
-	template := toCertificateTemplate(opts)
-	return createCertificate(rand.Reader, template, template, keyPair.PublicKey, keyPair.PrivateKey)
+	if template, err := toCertificateTemplate(opts); err != nil {
+		return nil, err
+	} else {
+		return createCertificate(rand.Reader, template, template, keyPair.PublicKey, keyPair.PrivateKey)
+	}
 }
 
-// CreateMiddleRootCertificate using parent certificate and parent private key to create a middle root certificate
-func CreateMiddleRootCertificate(keyPair KeyPair, certOpts ...CertificateOption) (*x509.Certificate, error) {
+// CreateCertificateWithIssuer create a certificate signed by specified issuer
+func CreateCertificateWithIssuer(keyPair KeyPair, certOpts ...CertificateOption) (*x509.Certificate, error) {
 	opts := applyDefaultCertificateOptions(certOpts...)
 	if opts.Issuer == nil || opts.IssuerPrivateKey == nil {
 		return nil, ErrInvalidCertOptions
 	}
 	if keyPair.PublicKey == nil {
-		return nil, errors.New("empty public key")
+		return nil, ErrEmptyPublicKey
 	}
-	template := toCertificateTemplate(opts)
-	return createCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
-}
-
-// CreateGeneralCertificate create a general certificate signed by parent private key
-func CreateGeneralCertificate(keyPair KeyPair, certOpts ...CertificateOption) (*x509.Certificate, error) {
-	opts := applyDefaultCertificateOptions(certOpts...)
-	if opts.Issuer == nil || opts.IssuerPrivateKey == nil {
-		return nil, ErrInvalidCertOptions
+	if template, err := toCertificateTemplate(opts); err != nil {
+		return nil, err
+	} else {
+		return createCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
 	}
-	if keyPair.PublicKey == nil {
-		return nil, errors.New("empty public key")
-	}
-	template := toCertificateTemplate(opts)
-	return createCertificate(rand.Reader, template, opts.Issuer, keyPair.PublicKey, opts.IssuerPrivateKey)
 }
 
 func EncodeCertificateChain(out io.Writer, certificates []*x509.Certificate) (err error) {
@@ -121,9 +129,25 @@ func EncodePKCS8PrivateKey(out io.Writer, privateKey any) (err error) {
 	return
 }
 
+func EncodePKCS8PublicKey(out io.Writer, publicKey any) (err error) {
+	var b []byte
+	if b, err = x509.MarshalPKIXPublicKey(publicKey); err == nil {
+		return encodeToWriter(out, &pem.Block{
+			Type:  "PUBLIC KEY",
+			Bytes: b,
+		})
+	}
+	return
+}
+
 func createCertificate(random io.Reader, template, parent *x509.Certificate, pub, priv any) (cert *x509.Certificate, err error) {
-	template.SubjectKeyId = internal.CalculateKeyID(pub)
-	template.AuthorityKeyId = parent.SubjectKeyId
+	template.SubjectKeyId, err = internal.CalculateKeyID(pub)
+	if err != nil {
+		return nil, err
+	}
+	if template != parent {
+		template.AuthorityKeyId = parent.SubjectKeyId
+	}
 	var der []byte
 	if der, err = x509.CreateCertificate(random, template, parent, pub, priv); err == nil {
 		return x509.ParseCertificate(der)
@@ -139,38 +163,57 @@ func applyDefaultCertificateOptions(certOpts ...CertificateOption) certificateOp
 	return opts
 }
 
-func toCertificateTemplate(opts certificateOptions) *x509.Certificate {
+func toCertificateTemplate(opts certificateOptions) (*x509.Certificate, error) {
 	template := &x509.Certificate{
 		Version:               opts.Version,
 		SerialNumber:          opts.SerialNumber,
 		IsCA:                  opts.IsCA,
-		Subject:               opts.Subject,
 		NotBefore:             opts.NotBefore,
 		NotAfter:              opts.NotAfter,
 		BasicConstraintsValid: true,
 	}
 
+	var err error
+	var subject pkix.Name
+	if subject, err = internal.ParsePKIXName(opts.Subject); err != nil {
+		return nil, err
+	}
+	template.Subject = subject
+
 	// General Certificate
 	if opts.IsCA == false {
-		template.IPAddresses = opts.IPs
-		template.DNSNames = opts.Domains
+		var ipAddresses []net.IP
+		var dnsNames []string
+		if ipAddresses, err = internal.ParseIPs(opts.IPs); err != nil {
+			return nil, err
+		}
+		if dnsNames, err = internal.ParseDomains(opts.Domains); err != nil {
+			return nil, err
+		}
+		template.IPAddresses = ipAddresses
+		template.DNSNames = dnsNames
+
 		template.KeyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment
 		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
-		if opts.NotAfter.Sub(opts.NotBefore) > constants.MaxTLSHours*time.Hour {
-			template.NotAfter = opts.NotBefore.Add(constants.MaxTLSHours * time.Hour)
+		if opts.NotAfter.Sub(opts.NotBefore) > MaxTLSHours*time.Hour {
+			template.NotAfter = opts.NotBefore.Add(MaxTLSHours * time.Hour)
 		}
+		template.PolicyIdentifiers = []asn1.ObjectIdentifier{DomainValidated}
 	} else {
-		// Root Certificate
-		template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
-		if opts.NotAfter.Sub(opts.NotBefore) > constants.MaxCAHours*time.Hour {
-			template.NotAfter = opts.NotBefore.Add(constants.MaxCAHours * time.Hour)
+		// Certificate authority
+		template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign
+		if opts.NotAfter.Sub(opts.NotBefore) > MaxCAHours*time.Hour {
+			template.NotAfter = opts.NotBefore.Add(MaxCAHours * time.Hour)
 		}
 		if opts.Issuer != nil && opts.IssuerPrivateKey != nil {
-			// Middle Root Certificate
-			template.MaxPathLen = 1
+			// Intermediate certificate authority
+			template.KeyUsage |= x509.KeyUsageDigitalSignature
+			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+			template.MaxPathLenZero = true
+			template.PolicyIdentifiers = []asn1.ObjectIdentifier{DomainValidated}
 		}
 	}
-	return template
+	return template, nil
 }
 
 func encodeToWriter(out io.Writer, blocks ...*pem.Block) error {

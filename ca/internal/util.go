@@ -3,9 +3,12 @@ package internal
 import (
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -25,149 +28,145 @@ func SerialNumber(x int64) *big.Int {
 	return b
 }
 
-func CalculateKeyID(pubKey any) []byte {
+// CalculateKeyID calculate the subject key identifier
+// as described in RFC 5280, Section 4.2.1.2, see
+// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.2
+//
+// The keyIdentifier is composed of the 160-bit SHA-1 hash of the
+// value of the BIT STRING subjectPublicKey (excluding the tag,
+// length, and number of unused bits).
+func CalculateKeyID(pubKey any) ([]byte, error) {
 	pkixByte, err := x509.MarshalPKIXPublicKey(pubKey)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	var pkiInfo struct {
 		Algorithm        pkix.AlgorithmIdentifier
 		SubjectPublicKey asn1.BitString
 	}
-	_, err = asn1.Unmarshal(pkixByte, &pkiInfo)
-	if err != nil {
-		panic(err)
+	if _, err = asn1.Unmarshal(pkixByte, &pkiInfo); err != nil {
+		return nil, err
 	}
 	skid := sha1.Sum(pkiInfo.SubjectPublicKey.Bytes)
-	return skid[:]
+	return skid[:], nil
 }
 
-func ParseDomains(domainStr []string) []string {
+// CalculateKeyFingerprint calculate the public key fingerprint
+// as known as Public-Key-Pins, see RFC 7469, Section Appendix A.
+//
+// Similar to:
+//
+//	openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform der |\
+//	openssl dgst -sha256 -binary | openssl enc -base64
+func CalculateKeyFingerprint(x any) (string, error) {
+	pubKeyBytes, err := retrievePublicKey(x)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(pubKeyBytes)
+	pin := make([]byte, base64.StdEncoding.EncodedLen(len(sum)))
+	base64.StdEncoding.Encode(pin, sum[:])
+	return string(pin), nil
+}
+
+func retrievePublicKey(x any) (b []byte, err error) {
+	switch x.(type) {
+	case *x509.Certificate:
+		b = x.(*x509.Certificate).RawSubjectPublicKeyInfo
+	default:
+		b, err = x509.MarshalPKIXPublicKey(x)
+	}
+	return
+}
+
+func ParseDomains(domainStr []string) ([]string, error) {
 	var domains []string
 	re := regexp.MustCompile("^[A-Za-z0-9-.*]+$")
 	for _, s := range domainStr {
 		if re.MatchString(s) {
 			domains = append(domains, s)
 		} else {
-			panic(fmt.Sprintf("invalid domain %s", s))
+			return nil, fmt.Errorf("invalid domain: %s", s)
 		}
 	}
 
-	return domains
+	return domains, nil
 }
 
-func ParseIPs(ipStr []string) []net.IP {
+func ParseIPs(ipStr []string) ([]net.IP, error) {
 	var ips []net.IP
 	for _, s := range ipStr {
 		p := net.ParseIP(s)
 		if p == nil {
-			panic(fmt.Sprintf("invalid IP %s", s))
+			return nil, fmt.Errorf("invalid ip: %s", s)
 		}
 		ips = append(ips, p)
 	}
-	return ips
+	return ips, nil
 }
 
-var applierList = map[string]func(name *pkix.Name, value any){
-	"C": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.Country = []string{value.(string)}
-		} else {
-			name.Country = value.([]string)
-		}
+type pkixNameOpt func(*pkix.Name, string)
+
+var pkixNameOptMap = map[string]pkixNameOpt{
+	"C": func(name *pkix.Name, value string) {
+		name.Country = append(name.Country, value)
 	},
-	"O": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.Organization = []string{value.(string)}
-		} else {
-			name.Organization = value.([]string)
-		}
+	"ST": func(name *pkix.Name, value string) {
+		name.Province = append(name.Province, value)
 	},
-	"OU": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.OrganizationalUnit = []string{value.(string)}
-		} else {
-			name.OrganizationalUnit = value.([]string)
-		}
+	"L": func(name *pkix.Name, value string) {
+		name.Locality = append(name.Locality, value)
 	},
-	"CN": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.CommonName = value.(string)
-		} else {
-			name.CommonName = value.([]string)[0]
-		}
+	"O": func(name *pkix.Name, value string) {
+		name.Organization = append(name.Organization, value)
 	},
-	"SERIALNUMBER": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.SerialNumber = value.(string)
-		} else {
-			name.SerialNumber = value.([]string)[0]
-		}
+	"OU": func(name *pkix.Name, value string) {
+		name.OrganizationalUnit = append(name.OrganizationalUnit, value)
 	},
-	"L": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.Locality = []string{value.(string)}
-		} else {
-			name.Locality = value.([]string)
-		}
+	"CN": func(name *pkix.Name, value string) {
+		name.CommonName = value
 	},
-	"ST": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.Province = []string{value.(string)}
-		} else {
-			name.Province = value.([]string)
-		}
+	"SERIALNUMBER": func(name *pkix.Name, value string) {
+		name.SerialNumber = value
 	},
-	"POSTALCODE": func(name *pkix.Name, value any) {
-		if _, ok := value.(string); ok {
-			name.PostalCode = []string{value.(string)}
-		} else {
-			name.PostalCode = value.([]string)
-		}
+	"POSTALCODE": func(name *pkix.Name, value string) {
+		name.PostalCode = append(name.PostalCode, value)
 	},
 }
 
-func ParsePKIXName(name string) (pkixName pkix.Name) {
+func ParsePKIXName(name string) (pkix.Name, error) {
+	var pkixName pkix.Name
+	var errFormat = fmt.Errorf("subject name is expected to be in the format "+
+		"/type0=value0/type1=value1/type2=... where characters may be escaped by \\. "+
+		"This name is not in that format: '%s'", name)
+
+	if name = strings.TrimSpace(name); name == "" {
+		return pkixName, errors.New("empty subject name")
+	}
+
 	nTok := NewTokenizer(name, '/')
 	for nTok.HasMoreTokens() {
 		token := nTok.NextToken()
-
-		if strings.Contains(token, "+") {
-			pTok := NewTokenizer(token, '+')
-			vTok := NewTokenizer(pTok.NextToken(), '=')
-
-			attribute := vTok.NextToken()
-			if !vTok.HasMoreTokens() {
-				panic("badly formatted directory string")
-			}
-			applier, ok := applierList[strings.ToUpper(attribute)]
-			if !ok {
-				panic("unknown attribute")
-			}
-
-			value := vTok.NextToken()
-
-			if pTok.HasMoreTokens() {
-				values := []string{value}
-				for pTok.HasMoreTokens() {
-					values = append(values, pTok.NextToken())
-				}
-				applier(&pkixName, values)
-			} else {
-				applier(&pkixName, value)
-			}
-		} else if token != "" {
+		if token != "" {
 			vTok := NewTokenizer(token, '=')
-			attribute := vTok.NextToken()
+			attribute := strings.TrimSpace(vTok.NextToken())
 			if !vTok.HasMoreTokens() {
-				panic("badly formatted directory string")
+				return pkixName, errFormat
 			}
-			value := vTok.NextToken()
-			if applier, ok := applierList[strings.ToUpper(attribute)]; ok {
-				applier(&pkixName, value)
+			value := strings.TrimSpace(vTok.NextToken())
+			if vTok.HasMoreTokens() {
+				return pkixName, errFormat
+			}
+			if attribute == "" || value == "" {
+				return pkixName, errFormat
+			}
+			if opt, ok := pkixNameOptMap[strings.ToUpper(attribute)]; ok {
+				opt(&pkixName, value)
+			} else {
+				return pkixName, fmt.Errorf("unknown subject name attribute: %s", attribute)
 			}
 		}
 	}
-	return
+	return pkixName, nil
 }

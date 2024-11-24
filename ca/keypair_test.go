@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -23,7 +24,7 @@ func TestGetKeyPairGenerator(t *testing.T) {
 
 func TestErrUnknownAlgorithm(t *testing.T) {
 	_, err := GetKeyPairGenerator("Unknown")
-	if err != ErrUnknownAlgorithm {
+	if !errors.Is(err, ErrUnknownAlgorithm) {
 		t.Error("unexpected error: ", err)
 	}
 }
@@ -51,7 +52,7 @@ func TestGenerateKeyPair(t *testing.T) {
 }
 
 func TestNewKeyPair(t *testing.T) {
-	if _, err := NewKeyPair(nil); err != ErrUnknownPrivateKey {
+	if _, err := NewKeyPair(nil); !errors.Is(err, ErrUnknownPrivateKey) {
 		t.Error("unexpected error: ", err)
 	}
 }

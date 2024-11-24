@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -13,8 +14,8 @@ var (
 )
 
 type KeyPair struct {
-	PublicKey  any
-	PrivateKey any
+	PublicKey  crypto.PublicKey
+	PrivateKey crypto.PrivateKey
 }
 
 type KeyPairGenerator interface {
@@ -26,16 +27,16 @@ type keyPairGenerator struct {
 	opts     keyOptions
 }
 
-type generator func(opts keyOptions) (any, error)
+type generator func(opts keyOptions) (crypto.PrivateKey, error)
 
 var generateList = map[string]generator{
-	"ECDSA": func(opts keyOptions) (any, error) {
+	"ECDSA": func(opts keyOptions) (crypto.PrivateKey, error) {
 		return ecdsa.GenerateKey(opts.Curve, opts.Random)
 	},
-	"RSA": func(opts keyOptions) (any, error) {
+	"RSA": func(opts keyOptions) (crypto.PrivateKey, error) {
 		return rsa.GenerateKey(opts.Random, opts.KeySize)
 	},
-	"ED25591": func(opts keyOptions) (any, error) {
+	"ED25591": func(opts keyOptions) (crypto.PrivateKey, error) {
 		_, priv, err := ed25519.GenerateKey(opts.Random)
 		return priv, err
 	},
@@ -51,18 +52,15 @@ func (kpg *keyPairGenerator) GenerateKeyPair() (KeyPair, error) {
 
 func NewKeyPair(privateKey any) (KeyPair, error) {
 	var kp KeyPair
-	var publicKey any
-	switch k := privateKey.(type) {
-	case *rsa.PrivateKey:
-		publicKey = &k.PublicKey
-	case *ecdsa.PrivateKey:
-		publicKey = &k.PublicKey
-	case ed25519.PrivateKey:
-		publicKey = k.Public().(ed25519.PublicKey)
-	default:
-		return kp, ErrUnknownPrivateKey
+
+	type PrivateKey interface {
+		Public() crypto.PublicKey
 	}
-	kp.PublicKey = publicKey
-	kp.PrivateKey = privateKey
-	return kp, nil
+	if priv, ok := privateKey.(PrivateKey); ok {
+		kp.PublicKey = priv.Public()
+		kp.PrivateKey = priv
+		return kp, nil
+	}
+
+	return kp, ErrUnknownPrivateKey
 }

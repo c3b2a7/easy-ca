@@ -4,20 +4,16 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"github.com/c3b2a7/easy-ca/ca/constants"
 	"github.com/c3b2a7/easy-ca/ca/internal"
 	"io"
 	"math/big"
-	"net"
-	"os"
 	"time"
 )
 
 var (
 	defaultKeyOptions = keyOptions{
 		Random:  rand.Reader,
-		KeySize: 2048,
+		KeySize: 4096,
 		Curve:   elliptic.P384(),
 	}
 
@@ -25,22 +21,10 @@ var (
 		Version:      3,
 		SerialNumber: internal.SerialNumber(-1),
 		IsCA:         true,
-		Subject:      lookupSubjectFromEnv(),
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().AddDate(20, 0, 0),
 	}
 )
-
-func lookupSubjectFromEnv() pkix.Name {
-	return internal.ParsePKIXName(lookupEnv("SUBJECT", constants.DefaultCASubject))
-}
-
-func lookupEnv(envName, def string) string {
-	if v, ok := os.LookupEnv(envName); ok {
-		return v
-	}
-	return def
-}
 
 type KeyOption interface {
 	apply(*keyOptions)
@@ -87,10 +71,10 @@ type certificateOptions struct {
 	Issuer           *x509.Certificate
 	IssuerPrivateKey any
 
-	Subject   pkix.Name
+	Subject   string
 	NotBefore time.Time
 	NotAfter  time.Time
-	IPs       []net.IP
+	IPs       []string
 	Domains   []string
 }
 
@@ -126,7 +110,7 @@ func WithIssuerPrivateKey(issuerPrivateKey any) CertificateOption {
 
 func WithSubject(subject string) CertificateOption {
 	return newFuncCertificateOption(func(options *certificateOptions) {
-		options.Subject = internal.ParsePKIXName(subject)
+		options.Subject = subject
 	})
 }
 
@@ -144,13 +128,13 @@ func WithNotAfter(notAfter time.Time) CertificateOption {
 
 func WithIPs(ips []string) CertificateOption {
 	return newFuncCertificateOption(func(options *certificateOptions) {
-		options.IPs = internal.ParseIPs(ips)
+		options.IPs = ips
 	})
 }
 
 func WithDomains(domains []string) CertificateOption {
 	return newFuncCertificateOption(func(options *certificateOptions) {
-		options.Domains = internal.ParseDomains(domains)
+		options.Domains = domains
 	})
 }
 
