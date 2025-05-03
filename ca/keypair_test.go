@@ -7,23 +7,24 @@ import (
 
 func TestGetKeyPairGenerator(t *testing.T) {
 	tests := []struct {
-		name string
+		keyAlgorithm KeyAlgorithm
 	}{
-		{"ECDSA"},
-		{"RSA"},
-		{"ED25591"},
+		{RSA},
+		{ECDSA},
+		{ED25519},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := GetKeyPairGenerator(test.name); err != nil {
-				t.Errorf("failed to get %s keypair generator, err: %s\n", test.name, err)
+		t.Run(test.keyAlgorithm.String(), func(t *testing.T) {
+			if _, err := GetKeyPairGenerator(test.keyAlgorithm); err != nil {
+				t.Errorf("failed to get %s keypair Generator, err: %s\n", test.keyAlgorithm, err)
 			}
 		})
 	}
 }
 
 func TestErrUnknownAlgorithm(t *testing.T) {
-	_, err := GetKeyPairGenerator("Unknown")
+	var alg KeyAlgorithm
+	_, err := GetKeyPairGenerator(alg)
 	if !errors.Is(err, ErrUnknownAlgorithm) {
 		t.Error("unexpected error: ", err)
 	}
@@ -31,21 +32,21 @@ func TestErrUnknownAlgorithm(t *testing.T) {
 
 func TestGenerateKeyPair(t *testing.T) {
 	tests := []struct {
-		name string
+		keyAlgorithm KeyAlgorithm
 	}{
-		{"ECDSA"},
-		{"RSA"},
-		{"ED25591"},
+		{RSA},
+		{ECDSA},
+		{ED25519},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(test.keyAlgorithm.String(), func(t *testing.T) {
 			var kgp KeyPairGenerator
 			var err error
-			if kgp, err = GetKeyPairGenerator(test.name); err != nil {
-				t.Errorf("failed to get %s keypair generator, err: %s\n", test.name, err)
+			if kgp, err = GetKeyPairGenerator(test.keyAlgorithm); err != nil {
+				t.Errorf("failed to get %s keypair Generator, err: %s\n", test.keyAlgorithm, err)
 			}
 			if _, err = kgp.GenerateKeyPair(); err != nil {
-				t.Errorf("failed to generate %s keypair, err: %s\n", test.name, err)
+				t.Errorf("failed to generate %s keypair, err: %s\n", test.keyAlgorithm, err)
 			}
 		})
 	}

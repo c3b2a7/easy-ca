@@ -6,44 +6,50 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"github.com/c3b2a7/easy-ca/ca/internal/testdata"
-	"os"
 	"testing"
 	"time"
 )
 
 func TestCreateSelfSignedCACertificate(t *testing.T) {
-	kpg, _ := GetKeyPairGenerator("ECDSA", WithCurve(elliptic.P384()))
+	kpg, _ := GetKeyPairGenerator(ECDSA, WithCurve(elliptic.P384()))
 	rootKeyPair, _ := kpg.GenerateKeyPair()
 
-	root, err := CreateSelfSignedRootCertificate(rootKeyPair, WithCA(true), WithSubject(testdata.RootCASubjectName))
+	rootCA, err := CreateSelfSignedRootCertificate(rootKeyPair, WithCA(true), WithSubject(testdata.RootCASubjectName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootCertFile, _ := os.OpenFile("./root_cert.pem", os.O_CREATE|os.O_WRONLY, 0600)
-	defer rootCertFile.Close()
-	EncodeCertificateChain(rootCertFile, []*x509.Certificate{root})
-	rootKeyFile, _ := os.OpenFile("./root_key.pem", os.O_CREATE|os.O_WRONLY, 0600)
-	defer rootKeyFile.Close()
-	EncodePKCS1PrivateKey(rootKeyFile, rootKeyPair.PrivateKey)
+
+	certBuffer := &bytes.Buffer{}
+	if err = EncodeCertificateChain(certBuffer, []*x509.Certificate{rootCA}); err != nil {
+		t.Fatalf("EncodeCertificateChain() error = %v", err)
+	}
+
+	keyBuffer := &bytes.Buffer{}
+	if err = EncodePKCS1PrivateKey(keyBuffer, rootKeyPair.PrivateKey); err != nil {
+		t.Fatalf("EncodePKCS1PrivateKey() error = %v", err)
+	}
 
 	middleKeyPair, _ := kpg.GenerateKeyPair()
-	middle, err := CreateCertificateWithIssuer(middleKeyPair,
+	intermediateCA, err := CreateCertificateWithIssuer(middleKeyPair,
 		WithCA(true),
 		WithSubject(testdata.IntermediateCASubjectName),
-		WithIssuer(root),
+		WithIssuer(rootCA),
 		WithIssuerPrivateKey(rootKeyPair.PrivateKey),
 		WithNotAfter(time.Now().AddDate(10, 0, 0)),
 	)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("CreateCertificateWithIssuer() error = %v", err)
 	}
 
-	middleCertfile, _ := os.OpenFile("./cert.pem", os.O_CREATE|os.O_WRONLY, 0600)
-	defer middleCertfile.Close()
-	EncodeCertificateChain(middleCertfile, []*x509.Certificate{middle, root})
-	middleKeyFile, _ := os.OpenFile("./key.pem", os.O_CREATE|os.O_WRONLY, 0600)
-	defer middleKeyFile.Close()
-	EncodePKCS1PrivateKey(middleKeyFile, middleKeyPair.PrivateKey)
+	certBuffer.Reset()
+	keyBuffer.Reset()
+
+	if err = EncodeCertificateChain(certBuffer, []*x509.Certificate{intermediateCA, rootCA}); err != nil {
+		t.Fatalf("EncodeCertificateChain() error = %v", err)
+	}
+	if err = EncodePKCS1PrivateKey(keyBuffer, middleKeyPair.PrivateKey); err != nil {
+		t.Fatalf("EncodePKCS1PrivateKey() error = %v", err)
+	}
 }
 
 func TestEncodePKCS8PublicKey(t *testing.T) {
