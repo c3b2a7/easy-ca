@@ -2,9 +2,6 @@ package ca
 
 import (
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rsa"
 	"errors"
 )
 
@@ -22,27 +19,12 @@ type KeyPairGenerator interface {
 	GenerateKeyPair() (KeyPair, error)
 }
 
-type keyPairGenerator struct {
-	generate generator
+type commonKeyPairGenerator struct {
+	generate KeyGenerator
 	opts     keyOptions
 }
 
-type generator func(opts keyOptions) (crypto.PrivateKey, error)
-
-var generateList = map[string]generator{
-	"ECDSA": func(opts keyOptions) (crypto.PrivateKey, error) {
-		return ecdsa.GenerateKey(opts.Curve, opts.Random)
-	},
-	"RSA": func(opts keyOptions) (crypto.PrivateKey, error) {
-		return rsa.GenerateKey(opts.Random, opts.KeySize)
-	},
-	"ED25591": func(opts keyOptions) (crypto.PrivateKey, error) {
-		_, priv, err := ed25519.GenerateKey(opts.Random)
-		return priv, err
-	},
-}
-
-func (kpg *keyPairGenerator) GenerateKeyPair() (KeyPair, error) {
+func (kpg *commonKeyPairGenerator) GenerateKeyPair() (KeyPair, error) {
 	privateKey, err := kpg.generate(kpg.opts)
 	if err != nil {
 		return KeyPair{}, err

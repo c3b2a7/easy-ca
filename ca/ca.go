@@ -14,7 +14,6 @@ import (
 	"github.com/c3b2a7/easy-ca/ca/internal"
 	"io"
 	"net"
-	"strings"
 	"time"
 )
 
@@ -36,21 +35,21 @@ const (
 )
 
 // GetKeyPairGenerator returns a KeyPairGenerator
-// The following algorithm are currently supported: ECDSA, RSA, ED25591
-// Unsupported algorithm result in an error.
-func GetKeyPairGenerator(algorithm string, opts ...KeyOption) (KeyPairGenerator, error) {
-	algorithm = strings.ToUpper(algorithm)
-	if choice, ok := generateList[algorithm]; ok {
-		kopts := defaultKeyOptions
-		for _, opt := range opts {
-			opt.apply(&kopts)
-		}
-		return &keyPairGenerator{
-			generate: choice,
-			opts:     kopts,
-		}, nil
+// The following algorithm are currently supported: ECDSA, RSA, ED25519
+// Unsupported key algorithm will return an ErrUnknownAlgorithm error.
+func GetKeyPairGenerator(algorithm KeyAlgorithm, opts ...KeyOption) (KeyPairGenerator, error) {
+	keyGenerator := GetKeyGenerator(algorithm)
+	if keyGenerator == nil {
+		return nil, ErrUnknownAlgorithm
 	}
-	return nil, ErrUnknownAlgorithm
+	kopts := defaultKeyOptions
+	for _, opt := range opts {
+		opt.apply(&kopts)
+	}
+	return &commonKeyPairGenerator{
+		generate: keyGenerator,
+		opts:     kopts,
+	}, nil
 }
 
 // CreateSelfSignedRootCertificate create a self-signed root certificate
